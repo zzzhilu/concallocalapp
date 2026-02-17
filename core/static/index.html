@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ConCall — AI 會議記錄</title>
+    <meta name="description" content="本地端 AI 即時會議紀錄：語音辨識、說話者分離、翻譯與摘要。">
+    <meta name="theme-color" content="#1a1a1a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         TITLE BAR
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <header class="titlebar">
+        <div class="titlebar__left">
+            <span class="titlebar__title">ConCall — AI 會議記錄</span>
+        </div>
+        <div class="titlebar__center">
+            <div class="titlebar__status" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span id="statusText">待命中</span>
+            </div>
+        </div>
+        <div class="titlebar__right">
+            <div class="titlebar__timer">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span id="timer">00:00:00</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         IDE LAYOUT  (Activity Bar | Side Panel | Editor)
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="ide-layout">
+
+        <!-- ── Activity Bar (left icon strip) ── -->
+        <aside class="activity-bar">
+            <div class="activity-bar__top">
+                <!-- Explorer -->
+                <button class="activity-btn active" data-tooltip="檔案總管" id="explorerBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <path d="M3 7v13h18V7H3z" />
+                        <path d="M3 7l3-4h5l2 4" />
+                    </svg>
+                </button>
+                <!-- Record -->
+                <button class="activity-btn" data-tooltip="錄音" id="recordBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="8" />
+                        <circle cx="12" cy="12" r="4" fill="currentColor" />
+                    </svg>
+                </button>
+                <!-- Stop & Summary -->
+                <button class="activity-btn" data-tooltip="停止並摘要" id="stopBtn" disabled>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" />
+                    </svg>
+                </button>
+                <div class="activity-divider"></div>
+                <!-- Mode Toggle -->
+                <button class="activity-btn" data-tooltip="模式：中文" id="modeToggleBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20" />
+                    </svg>
+                </button>
+            </div>
+            <div class="activity-bar__bottom">
+                <!-- Export -->
+                <button class="activity-btn" data-tooltip="匯出" id="exportBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                    </svg>
+                </button>
+                <!-- Clear -->
+                <button class="activity-btn" data-tooltip="清除" id="clearBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    </svg>
+                </button>
+                <!-- Settings -->
+                <button class="activity-btn" data-tooltip="設定" id="settingsBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="3" />
+                        <path
+                            d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+                    </svg>
+                </button>
+            </div>
+        </aside>
+
+        <!-- ── Side Column (Explorer + Terminal) ── -->
+        <div class="side-column" id="sideColumn">
+            <aside class="side-panel" id="sidePanel">
+                <div class="side-panel__header">檔案總管</div>
+
+                <!-- Workspace Files -->
+                <div class="tree-section">
+                    <div class="tree-section__head">
+                        <svg width="10" height="10" viewBox="0 0 10 10">
+                            <path d="M3 1l4 4-4 4" fill="currentColor" />
+                        </svg>
+                        <span>CONCALL 工作區</span>
+                    </div>
+                    <div class="tree-item active" data-tab="transcription">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#BD93F9" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        <span class="tree-filename">逐字稿.ts</span>
+                    </div>
+                    <div class="tree-item" data-tab="translation">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#50FA7B" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        <span class="tree-filename">翻譯.ts</span>
+                    </div>
+                    <div class="tree-item" data-tab="speakers">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F1FA8C" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        <span class="tree-filename">說話者管理</span>
+                    </div>
+                    <div class="tree-item" data-tab="summary">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFB86C" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        <span class="tree-filename">摘要.md</span>
+                    </div>
+                </div>
+
+                <!-- Speakers Section -->
+                <div class="tree-section">
+                    <div class="tree-section__head">
+                        <svg width="10" height="10" viewBox="0 0 10 10">
+                            <path d="M3 1l4 4-4 4" fill="currentColor" />
+                        </svg>
+                        <span>說話者</span>
+                    </div>
+                    <div id="speakersList">
+                        <div class="tree-item speaker-empty">
+                            <span class="tree-filename comment-text">// 等待說話者辨識中...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Meeting History -->
+                <div class="tree-section">
+                    <div class="tree-section__head">
+                        <svg width="10" height="10" viewBox="0 0 10 10">
+                            <path d="M3 1l4 4-4 4" fill="currentColor" />
+                        </svg>
+                        <span>會議紀錄</span>
+                    </div>
+                    <div id="meetingsList">
+                        <div class="tree-item meeting-empty">
+                            <span class="tree-filename comment-text">// 尚無會議紀錄</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- ── Terminal (inside side column) ── -->
+            <div class="terminal-panel" id="terminalPanel">
+                <div class="terminal__head">
+                    <div class="terminal__tabs">
+                        <span class="terminal__tab active">終端機</span>
+                    </div>
+                    <button class="terminal__toggle" id="terminalToggle" title="切換終端機">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="terminal__body" id="terminalBody">
+                    <div class="terminal-line"><span class="t-prompt">$</span><span class="t-text">concall --init
+                            --mode=local-ai</span></div>
+                    <div class="terminal-line"><span class="t-text t-success">✓ WebSocket 連線已建立</span></div>
+                    <div class="terminal-line"><span class="t-text t-info">ℹ 準備就緒。選擇模式並按下錄音按鈕。</span></div>
+                    <div class="terminal-line"><span class="t-prompt">$</span><span class="cursor-blink">|</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Editor Area ── -->
+        <main class="editor-area">
+
+            <!-- Tab Bar -->
+            <div class="tab-bar">
+                <div class="tab active" data-tab="transcription">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#BD93F9" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>逐字稿.ts</span>
+                    <button class="tab-close">&times;</button>
+                </div>
+                <div class="tab" data-tab="translation">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#50FA7B" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>翻譯.ts</span>
+                    <button class="tab-close">&times;</button>
+                </div>
+                <div class="tab" data-tab="speakers">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F1FA8C" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>說話者管理</span>
+                    <button class="tab-close">&times;</button>
+                </div>
+                <div class="tab" data-tab="summary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFB86C" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>摘要.md</span>
+                    <button class="tab-close">&times;</button>
+                </div>
+            </div>
+
+            <!-- Breadcrumb -->
+            <div class="breadcrumb">
+                <span class="breadcrumb__seg">concall</span>
+                <span class="breadcrumb__sep">›</span>
+                <span class="breadcrumb__seg">src</span>
+                <span class="breadcrumb__sep">›</span>
+                <span class="breadcrumb__seg" id="breadcrumbFile">逐字稿.ts</span>
+            </div>
+
+            <!-- Panel Container (absolute-stacked) -->
+            <div class="panels-container">
+                <!-- Transcription -->
+                <div class="editor-panel active" id="panel-transcription" data-tab="transcription">
+                    <div class="code-area" id="transcriptionPanel">
+                        <div class="empty-state" id="transcriptionEmpty">
+                            <div class="code-line"><span class="ln">1</span><span class="cm">// ConCall AI —
+                                    即時逐字稿</span></div>
+                            <div class="code-line"><span class="ln">2</span><span class="cm">// 按下錄音按鈕 (●) 開始</span>
+                            </div>
+                            <div class="code-line"><span class="ln">3</span><span class="cm">//</span></div>
+                            <div class="code-line"><span class="ln">4</span><span class="kw">export const</span> <span
+                                    class="var">status</span> <span class="op">=</span> <span
+                                    class="str">"awaiting_input"</span></div>
+                            <div class="code-line"><span class="ln">5</span></div>
+                            <div class="code-line"><span class="ln">6</span><span class="cursor-blink">|</span></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Translation -->
+                <div class="editor-panel" id="panel-translation" data-tab="translation">
+                    <div class="code-area" id="translationPanel">
+                        <div class="empty-state" id="translationEmpty">
+                            <div class="code-line"><span class="ln">1</span><span class="cm">// 翻譯輸出</span></div>
+                            <div class="code-line"><span class="ln">2</span><span class="cm">// 切換至英文模式以啟用翻譯</span>
+                            </div>
+                            <div class="code-line"><span class="ln">3</span></div>
+                            <div class="code-line"><span class="ln">4</span><span class="cursor-blink">|</span></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Speakers Editor -->
+                <div class="editor-panel" id="panel-speakers" data-tab="speakers">
+                    <div class="speaker-editor" id="speakersPanel">
+                        <div class="speaker-editor__header">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" />
+                                <circle cx="9" cy="7" r="4" />
+                                <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+                            </svg>
+                            <span>說話者管理</span>
+                        </div>
+                        <div class="speaker-editor__list" id="speakerEditorList">
+                            <div class="speaker-editor__empty" id="speakerEditorEmpty">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="1.5" opacity="0.4">
+                                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" />
+                                    <circle cx="9" cy="7" r="4" />
+                                    <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+                                </svg>
+                                <p>尚未偵測到說話者</p>
+                                <p class="speaker-editor__hint">開始錄音後將自動識別說話者</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Summary -->
+                <div class="editor-panel" id="panel-summary" data-tab="summary">
+                    <div class="summary-toolbar" id="summaryToolbar">
+                        <div class="summary-toolbar__group">
+                            <button class="summary-toolbar__btn active" id="summaryPreviewBtn" title="預覽模式">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg>
+                                <span>預覽</span>
+                            </button>
+                            <button class="summary-toolbar__btn" id="summaryEditBtn" title="編輯模式">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                                    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                </svg>
+                                <span>編輯</span>
+                            </button>
+                        </div>
+                        <div class="summary-toolbar__group">
+                            <button class="summary-toolbar__btn" id="summaryHighlightBtn" title="螢光標記選取文字">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                                </svg>
+                                <span>螢光標記</span>
+                            </button>
+                            <button class="summary-toolbar__btn summary-toolbar__btn--save" id="summarySaveBtn"
+                                title="儲存修改">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                                    <polyline points="17 21 17 13 7 13 7 21" />
+                                    <polyline points="7 3 7 8 15 8" />
+                                </svg>
+                                <span>儲存</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="code-area markdown-preview" id="summaryContent">
+                        <div class="empty-state" id="summaryEmpty">
+                            <div class="code-line"><span class="ln">1</span><span class="cm"># 會議摘要</span>
+                            </div>
+                            <div class="code-line"><span class="ln">2</span></div>
+                            <div class="code-line"><span class="ln">3</span><span class="cm">*摘要將在錄音停止後自動生成...*</span>
+                            </div>
+                        </div>
+                    </div>
+                    <textarea class="summary-editor-textarea" id="summaryTextarea" placeholder="在此編輯 Markdown 摘要..."
+                        spellcheck="false" style="display:none;"></textarea>
+                </div>
+            </div>
+        </main>
+    </div>
+
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         STATUS BAR
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <footer class="statusbar">
+        <div class="statusbar__left">
+            <div class="sb-item">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="6" y1="3" x2="6" y2="15" />
+                    <circle cx="18" cy="6" r="3" />
+                    <circle cx="6" cy="18" r="3" />
+                    <path d="M18 9a9 9 0 01-9 9" />
+                </svg>
+                <span>main</span>
+            </div>
+            <div class="sb-item status-sync" id="statusBarConnection">
+                <span class="status-bar-dot"></span>
+                <span id="statusBarText">連線中...</span>
+            </div>
+        </div>
+        <div class="statusbar__center">
+            <div class="sb-item">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span id="timerStatus">00:00:00</span>
+            </div>
+            <div class="sb-item">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                    <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                </svg>
+                <div class="audio-level" id="audioLevel">
+                    <div class="level-bar" id="levelBar"></div>
+                </div>
+            </div>
+        </div>
+        <div class="statusbar__right">
+            <div class="sb-item" id="detectedLangStatus"><span id="detectedLang">—</span></div>
+            <div class="sb-item" id="modeIndicator">
+                <span id="modeZh" class="mode-opt active" data-mode="zh">中文</span>
+                <span class="mode-sep">/</span>
+                <span id="modeEn" class="mode-opt" data-mode="en-translate">EN</span>
+            </div>
+            <div class="sb-item">UTF-8</div>
+        </div>
+    </footer>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODALS
+         ═══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Settings Modal (Command-Palette style) -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-palette">
+            <div class="modal-palette__head">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <span class="modal-palette__title">設定</span>
+                <button class="modal-close" id="closeSettings">&times;</button>
+            </div>
+            <div class="modal-palette__body">
+                <div class="setting-row">
+                    <label class="setting-key">audio.inputDevice</label>
+                    <select id="audioDeviceSelect" class="setting-select">
+                        <option value="">載入中...</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <label class="setting-key">audio.source</label>
+                    <select id="audioSourceSelect" class="setting-select">
+                        <option value="microphone">麥克風</option>
+                        <option value="system">喇叭 (系統全域聲音)</option>
+                        <option value="both" selected>麥克風 + 喇叭 (混合)</option>
+                    </select>
+                    <span class="setting-desc">// 選擇「喇叭」將監聽系統所有聲音輸出（會議、影片、音樂等）</span>
+                </div>
+                <div class="setting-row">
+                    <label class="setting-key">translation.auto</label>
+                    <label class="toggle"><input type="checkbox" id="autoTranslate" checked><span
+                            class="toggle-track"></span></label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Modal (Editor style) -->
+    <div class="modal-overlay" id="summaryModal">
+        <div class="modal-editor">
+            <div class="modal-editor__head">
+                <div class="modal-editor__tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFB86C" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>摘要.md — 預覽</span>
+                </div>
+                <button class="modal-close" id="closeSummary">&times;</button>
+            </div>
+            <div class="modal-editor__body" id="summaryModalContent">
+                <div class="summary-loading">
+                    <div class="spinner"></div>
+                    <p class="cm">// AI 正在分析會議內容...</p>
+                </div>
+            </div>
+            <div class="modal-editor__foot">
+                <button class="btn btn--ghost" id="copySummary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    複製
+                </button>
+                <button class="btn btn--primary" id="downloadSummary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                    </svg>
+                    下載 .md
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Loading Overlay -->
+    <div class="loading-overlay" id="summaryLoadingOverlay">
+        <div class="loading-card">
+            <div class="loading-spinner"></div>
+            <p class="loading-title">正在生成摘要</p>
+            <p class="loading-desc">AI 正在分析會議內容<span class="loading-dots"></span></p>
+        </div>
+    </div>
+
+    <!-- ═══ Scripts ═══ -->
+    <script src="/static/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js')
+                .then(reg => console.log('[SW] Registered:', reg.scope))
+                .catch(err => console.warn('[SW] Registration failed:', err));
+        }
+    </script>
+</body>
+
+</html>

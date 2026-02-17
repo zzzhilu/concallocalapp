@@ -1,0 +1,11 @@
+# worker-asr 依賴
+# GPU 0: Faster-Whisper + Silero VAD + Pyannote Diarization
+faster-whisper==1.0.3
+torch==2.2.1
+torchaudio==2.2.1
+pyannote.audio==3.1.1
+redis[hiredis]==5.0.1
+numpy==1.26.4
+soundfile==0.12.1
+huggingface-hub==0.21.4
+opencc-python-reimplemented>=0.1.7

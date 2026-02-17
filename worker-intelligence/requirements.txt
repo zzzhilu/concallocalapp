@@ -1,0 +1,10 @@
+# worker-intelligence 依賴
+# CPU Only — 透過 OpenAI SDK 呼叫 vLLM API
+openai==1.12.0
+httpx>=0.25.0,<0.28.0
+redis[hiredis]==5.0.1
+numpy==1.26.4
+docker==7.0.0
+urllib3<2
+requests<2.32
+opencc-python-reimplemented>=0.1.7

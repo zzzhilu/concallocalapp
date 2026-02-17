@@ -1,0 +1,34 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Models (too large for git)
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+redis_data/
+
+# App data (meetings, etc.)
+data/
+
+# Icons/assets
+*.ico
