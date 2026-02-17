@@ -1028,6 +1028,17 @@ function setMode(mode) {
             panelsContainer.classList.remove('split-view');
             // Restore single-tab view
             switchTab(currentTab === 'translation' ? 'transcription' : currentTab);
+
+            // Stop vLLM container to release GPU memory
+            addTerminalLine('[模型] 正在釋放 GPU 記憶體（停止 vLLM）...', 'info');
+            fetch('/api/llm/stop', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    addTerminalLine('[模型] ✅ vLLM 已停止，GPU 記憶體已釋放', 'success');
+                })
+                .catch(err => {
+                    addTerminalLine(`[模型] ⚠️ vLLM 停止失敗: ${err.message}`, 'error');
+                });
         }
     }
 

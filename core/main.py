@@ -167,6 +167,13 @@ async def api_llm_warmup():
     asyncio.create_task(manage_vllm("start"))
     return JSONResponse({"ok": True, "message": "vLLM container starting..."})
 
+@app.post("/api/llm/stop")
+async def api_llm_stop():
+    """停止 vLLM 容器以釋放 GPU 記憶體。"""
+    logger.info("LLM stop request received. Stopping vLLM container...")
+    asyncio.create_task(manage_vllm("stop"))
+    return JSONResponse({"ok": True, "message": "vLLM container stopping..."})
+
 # ---------------------------------------------------------------------------
 # 詞彙表 (Glossary) API
 # ---------------------------------------------------------------------------

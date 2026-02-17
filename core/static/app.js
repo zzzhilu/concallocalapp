@@ -341,25 +341,71 @@ function addTranscription(data) {
     addTerminalLine(`[ASR] +${data.segments.length} 個片段已接收`, 'info');
 }
 
+/**
+ * 過濾 <think>...</think> 標籤 (前端防禦)
+ */
+function stripThinkTags(text) {
+    if (!text) return text;
+    return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
 function addTranslation(data) {
     const empty = document.getElementById('translationEmpty');
     if (empty) empty.style.display = 'none';
 
+    // 過濾 <think> 標籤
+    const originalText = stripThinkTags(data.original_text || '');
+    const translatedText = stripThinkTags(data.translated_text || '');
+
+    if (!translatedText) return;
+
+    // 修正模式：就地更新之前的翻譯條目
+    if (data.is_revision && data.seg_ids && data.seg_ids.length > 0) {
+        // 找到第一個舊條目作為插入錨點，移除其餘的
+        let anchor = null;
+        for (const segId of data.seg_ids) {
+            const el = translationPanel.querySelector(`[data-seg-id="${segId}"]`);
+            if (el) {
+                if (!anchor) {
+                    anchor = el;  // 保留第一個作為替換目標
+                } else {
+                    el.remove();  // 移除其餘舊條目
+                }
+            }
+        }
+
+        // 建立修正後的合併條目（用第一個 seg_id 作為標識）
+        translationLineCounter++;
+        const entry = document.createElement('div');
+        entry.className = 'translation-entry translation-revised';
+        entry.setAttribute('data-seg-id', data.seg_ids[0]);
+        entry.innerHTML = `
+            <div class="entry-original">${escapeHtml(originalText)}</div>
+            <div class="entry-translated">${escapeHtml(translatedText)}</div>
+        `;
+
+        if (anchor) {
+            anchor.replaceWith(entry);  // 就地替換，不跳到底部
+        } else {
+            translationPanel.appendChild(entry);  // fallback
+        }
+        translationPanel.scrollTop = translationPanel.scrollHeight;
+        return;
+    }
+
+    // 正常模式：新增翻譯條目
     translationLineCounter++;
     const entry = document.createElement('div');
     entry.className = 'translation-entry';
+    if (data.seg_id) {
+        entry.setAttribute('data-seg-id', data.seg_id);
+    }
     entry.innerHTML = `
-        <div class="entry-line">
-            <span class="line-number">${padLineNum(translationLineCounter)}</span>
-            <span class="comment-text">// ${escapeHtml(data.source_lang || '?')} → ${escapeHtml(data.target_lang || '?')}</span>
-        </div>
-        <div class="entry-original">${escapeHtml(data.original_text)}</div>
-        <div class="entry-translated">${escapeHtml(data.translated_text)}</div>
+        <div class="entry-original">${escapeHtml(originalText)}</div>
+        <div class="entry-translated">${escapeHtml(translatedText)}</div>
     `;
     translationPanel.appendChild(entry);
     translationPanel.scrollTop = translationPanel.scrollHeight;
-
-    addTerminalLine(`[翻譯] ${data.source_lang || '?'} → ${data.target_lang || '?'}`, 'info');
 }
 
 function updateSpeakers(data) {
@@ -513,14 +559,14 @@ let _summaryEditMode = false;
 let _currentMeetingId = null; // Track which meeting is loaded
 
 function showSummary(data) {
-    const summaryText = data.summary || '無摘要內容';
+    const summaryText = stripThinkTags(data.summary || '無摘要內容');
     _lastSummaryText = summaryText;
     renderSummaryText(summaryText);
     addTerminalLine('[摘要] 會議摘要已生成', 'success');
 }
 
 function appendSummaryChunk(chunk) {
-    _summaryBuffer += chunk;
+    _summaryBuffer += stripThinkTags(chunk);
     _lastSummaryText = _summaryBuffer;
     renderSummaryText(_summaryBuffer);
 }
@@ -1028,6 +1074,17 @@ function setMode(mode) {
             panelsContainer.classList.remove('split-view');
             // Restore single-tab view
             switchTab(currentTab === 'translation' ? 'transcription' : currentTab);
+
+            // Stop vLLM container to release GPU memory
+            addTerminalLine('[模型] 正在釋放 GPU 記憶體（停止 vLLM）...', 'info');
+            fetch('/api/llm/stop', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    addTerminalLine('[模型] ✅ vLLM 已停止，GPU 記憶體已釋放', 'success');
+                })
+                .catch(err => {
+                    addTerminalLine(`[模型] ⚠️ vLLM 停止失敗: ${err.message}`, 'error');
+                });
         }
     }
 
@@ -1413,9 +1470,16 @@ async function saveMeeting() {
         return spk ? `[${time}] ${spk}: ${seg.text}` : `[${time}] ${seg.text}`;
     });
 
-    // Translations: read from DOM (no in-memory array exists)
-    const translationEls = document.querySelectorAll('#translationContent .translation-entry');
-    const translations = Array.from(translationEls).map(el => el.textContent.trim());
+    // Translations: read structured data from DOM
+    const translationEls = document.querySelectorAll('#translationPanel .translation-entry');
+    const translations = Array.from(translationEls).map(el => {
+        const orig = el.querySelector('.entry-original');
+        const trans = el.querySelector('.entry-translated');
+        return {
+            original: orig ? orig.textContent.trim() : '',
+            translated: trans ? trans.textContent.trim() : el.textContent.trim()
+        };
+    });
 
     // Summary: use in-memory _lastSummaryText (DOM may have rendered HTML)
     const summary = _lastSummaryText || '';
@@ -1527,11 +1591,20 @@ async function loadMeeting(meetingId) {
                 if (ch.id !== 'translationEmpty') ch.remove();
             });
             translationLineCounter = 0;
-            m.translations.forEach(line => {
+            m.translations.forEach(item => {
                 translationLineCounter++;
                 const div = document.createElement('div');
-                div.className = 'code-line';
-                div.innerHTML = `<span class="line-number">${padLineNum(translationLineCounter)}</span><span class="code-text">${escapeHtml(line)}</span>`;
+                div.className = 'translation-entry';
+                // 向下相容：舊記錄可能是 string
+                if (typeof item === 'string') {
+                    div.innerHTML = `<div class="entry-translated">${escapeHtml(item)}</div>`;
+                } else {
+                    const origHtml = item.original ? `<div class="entry-original">${escapeHtml(item.original)}</div>` : '';
+                    div.innerHTML = `
+                        ${origHtml}
+                        <div class="entry-translated">${escapeHtml(item.translated || '')}</div>
+                    `;
+                }
                 translationPanelEl.appendChild(div);
             });
         }
@@ -1683,7 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             _glossaryTerms.forEach((term, idx) => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td class="glossary-en">${term.en}</td><td class="glossary-zh">${term.zh}</td><td><button class="glossary-del-btn" data-idx="${idx}" title="刪除">✕</button></td>`;
+                tr.innerHTML = `<td class="glossary-en">${escapeHtml(term.en)}</td><td class="glossary-zh">${escapeHtml(term.zh)}</td><td><button class="glossary-del-btn" data-idx="${idx}" title="刪除">✕</button></td>`;
                 glossaryTableBody.appendChild(tr);
             });
         }

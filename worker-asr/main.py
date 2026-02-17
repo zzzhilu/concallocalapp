@@ -147,9 +147,23 @@ class ModelManager:
             if len(audio_tensor.shape) > 1:
                 audio_tensor = audio_tensor.mean(dim=-1)
 
-            # 取得語音概率
-            speech_prob = self.vad_model(audio_tensor, TARGET_SAMPLE_RATE).item()
-            return speech_prob > 0.5
+            # Silero VAD 要求固定 chunk 大小：16kHz → 512 samples
+            VAD_CHUNK_SIZE = 512
+            self.vad_model.reset_states()  # 重置狀態避免跨 buffer 干擾
+
+            # 將大 buffer 切成 512-sample 的小塊逐個偵測
+            num_chunks = len(audio_tensor) // VAD_CHUNK_SIZE
+            if num_chunks == 0:
+                # 音訊太短，退回 RMS
+                return compute_rms(audio) > SILENCE_RMS_THRESHOLD
+
+            for i in range(num_chunks):
+                chunk = audio_tensor[i * VAD_CHUNK_SIZE : (i + 1) * VAD_CHUNK_SIZE]
+                speech_prob = self.vad_model(chunk, TARGET_SAMPLE_RATE).item()
+                if speech_prob > 0.5:
+                    return True  # 任何一個 chunk 有語音就算有
+
+            return False
         except Exception as e:
             logger.warning(f"VAD 檢測失敗: {e}")
             return compute_rms(audio) > SILENCE_RMS_THRESHOLD

@@ -12,8 +12,10 @@ ConCall Local Model — worker-intelligence
 
 import asyncio
 import json
+import hashlib
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -48,9 +50,14 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://vllm-server:8000/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-AWQ")
 
-# 翻譯/摘要設定 (ctx=16384)
+# 翻譯/摘要設定
 TRANSLATE_MAX_TOKENS = 512
 SUMMARY_MAX_TOKENS = 2048
+CHUNK_SUMMARY_MAX_TOKENS = 1024
+
+# 分段摘要設定
+CHUNK_SIZE = 5000          # 每段最大字元數（約 25-35 分鐘會議）
+CHUNK_THRESHOLD = 10000    # 超過此字元數啟動分段摘要
 
 # 重試設定
 MAX_RETRIES = 3
@@ -121,21 +128,70 @@ async def ensure_llm_ready(timeout=120):
 # ---------------------------------------------------------------------------
 # 翻譯功能
 # ---------------------------------------------------------------------------
-TRANSLATE_PROMPT_EN2ZH = """你是專業的同步口譯員。翻譯策略：意譯為主，直譯為輔。忽略口語贅字，專注於傳達核心邏輯。若不確定專有名詞，保留原文。
+TRANSLATE_PROMPT_EN2ZH = """你是即時口譯員。直接輸出繁體中文翻譯，不要任何說明、解釋或思考過程。忽略口語贅字，保留專有名詞原文。"""
 
-規則：
-- 必須使用繁體中文 (Traditional Chinese)
-- 只輸出翻譯結果，不要加任何說明或解釋
-- 翻譯要自然、流暢，如同專業口譯員的即時翻譯"""
+TRANSLATE_PROMPT_ZH2EN = """You are a real-time translator. Output ONLY the English translation. No explanations, no thinking, no extra text."""
 
-TRANSLATE_PROMPT_ZH2EN = """You are a professional real-time translator. Translate the following Traditional Chinese text into natural, fluent English.
+def strip_think_tags(text: str) -> str:
+    """移除 LLM 回應中的 <think>...</think> 標籤及其內容。"""
+    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    return cleaned if cleaned else text
 
-Rules:
-- Output ONLY the translation, no explanations
-- Keep proper nouns in their original form
-- Maintain the tone and style of the original"""
 
-async def translate_text(text: str, source_lang: str = "auto") -> dict:
+# ---------------------------------------------------------------------------
+# 漸進式翻譯狀態
+# ---------------------------------------------------------------------------
+# 每個 session 追蹤最近的 segments，合併翻譯以產生更好的結果
+_session_segments: dict[str, list[dict]] = {}  # session_id -> [{text, seg_id, timestamp}]
+_last_revision_hash: dict[str, str] = {}       # session_id -> md5 hash (去重)
+SEGMENT_MERGE_WINDOW = 5    # 最多合併最近 N 個 segments
+REVISION_MIN_CHARS = 30     # 合併文字超過此長度才觸發修正翻譯
+REVISION_MAX_CHARS = 200    # 合併文字超過此長度不再合併（避免過長句子）
+SENTENCE_END_RE = re.compile(r'[.!?。！？；：\n]\s*$')  # 句尾標點偵測
+
+
+# ---------------------------------------------------------------------------
+# 詞彙表快取（避免每次翻譯都開新 Redis 連線）
+# ---------------------------------------------------------------------------
+_glossary_cache: list | None = None
+_glossary_cache_ts: float = 0
+GLOSSARY_CACHE_TTL = 30  # 快取 30 秒
+
+
+async def get_glossary_terms(redis_conn: aioredis.Redis) -> list:
+    """從 Redis 讀取詞彙表，帶 TTL 快取。"""
+    global _glossary_cache, _glossary_cache_ts
+    now = time.time()
+    if _glossary_cache is not None and (now - _glossary_cache_ts) < GLOSSARY_CACHE_TTL:
+        return _glossary_cache
+    try:
+        glossary_json = await redis_conn.get(GLOSSARY_KEY)
+        if glossary_json:
+            _glossary_cache = json.loads(glossary_json)
+        else:
+            _glossary_cache = []
+        _glossary_cache_ts = now
+    except Exception as e:
+        logger.warning(f"Failed to load glossary from Redis: {e}")
+        if _glossary_cache is None:
+            _glossary_cache = []
+    return _glossary_cache
+
+
+def _build_glossary_suffix(terms: list, target_lang: str = "zh") -> str:
+    """根據詞彙表建構 prompt 後綴。"""
+    if not terms:
+        return ""
+    if target_lang == "zh":
+        glossary_lines = "\n".join(f"- {t['en']} → {t['zh']}" for t in terms if t.get('en') and t.get('zh'))
+    else:
+        glossary_lines = "\n".join(f"- {t['zh']} → {t['en']}" for t in terms if t.get('en') and t.get('zh'))
+    if not glossary_lines:
+        return ""
+    return f"\n專有名詞對照：\n{glossary_lines}"
+
+
+async def translate_text(text: str, source_lang: str = "auto", redis_conn: aioredis.Redis = None) -> dict:
     """翻譯文字。"""
     global llm_client
     
@@ -166,21 +222,10 @@ async def translate_text(text: str, source_lang: str = "auto") -> dict:
         # 根據翻譯方向選擇對應的 system prompt
         system_prompt = TRANSLATE_PROMPT_EN2ZH if target_lang == "zh" else TRANSLATE_PROMPT_ZH2EN
 
-        # 注入自訂詞彙表
-        try:
-            r = aioredis.from_url(REDIS_URL, decode_responses=True)
-            glossary_json = await r.get(GLOSSARY_KEY)
-            await r.aclose()
-            if glossary_json:
-                terms = json.loads(glossary_json)
-                if terms:
-                    if target_lang == "zh":
-                        glossary_lines = "\n".join(f"- {t['en']} → {t['zh']}" for t in terms)
-                    else:
-                        glossary_lines = "\n".join(f"- {t['zh']} → {t['en']}" for t in terms)
-                    system_prompt += f"\n\n以下是專有名詞對照表，請嚴格遵循：\n{glossary_lines}"
-        except Exception as e:
-            logger.warning(f"Failed to load glossary from Redis: {e}")
+        # 注入自訂詞彙表（使用快取）
+        if redis_conn:
+            terms = await get_glossary_terms(redis_conn)
+            system_prompt += _build_glossary_suffix(terms, target_lang)
 
         response = await llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -190,9 +235,12 @@ async def translate_text(text: str, source_lang: str = "auto") -> dict:
             ],
             max_tokens=TRANSLATE_MAX_TOKENS,
             temperature=0.3,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 
         translated = response.choices[0].message.content.strip()
+        # 防禦性過濾：移除任何 <think> 標籤
+        translated = strip_think_tags(translated)
 
         return {
             "translated_text": translated,
@@ -246,16 +294,105 @@ SUMMARY_SYSTEM_PROMPT = """你是專業的會議紀錄整理專家。根據會�
 4. 若有說話者標籤請保留
 5. 決議和待辦必須具體、可追蹤"""
 
+# ---------------------------------------------------------------------------
+# 分段摘要 Prompts
+# ---------------------------------------------------------------------------
+CHUNK_SUMMARY_PROMPT = """你是會議紀錄整理專家。以下是一段會議逐字稿片段，請用繁體中文提取重點：
+
+1. 列出所有討論的議題和關鍵觀點
+2. 列出任何決議或待辦事項
+3. 保留說話者標籤（如有）
+4. 簡潔扼要，只保留重要資訊
+
+直接輸出摘要，不需額外說明。"""
+
+MERGE_SUMMARY_PROMPT = """你是專業的會議紀錄整理專家。以下是同一場會議不同時段的分段摘要。
+請將它們整合為一份完整的結構化會議紀錄，用繁體中文按以下 Markdown 格式輸出：
+
+# [會議標題]
+
+**日期**：[從對話推斷或標記今日日期]
+**參與者**：[從說話者標籤列出，若無標籤寫「未標註」]
+
+## 重點討論
+
+### [議題 1]
+- 討論摘要（1-2句）
+- 關鍵觀點
+
+## 決議事項
+- ✅ [決議 1]
+
+## 待辦事項
+
+| 事項 | 負責人 | 期限 | 狀態 |
+|------|--------|------|------|
+| 任務描述 | 人名 | 日期 | [ ] 待辦 |
+
+## 後續步驟
+- [下一步行動]
+
+規則：
+1. 合併相同議題，去除重複內容
+2. 必須使用繁體中文
+3. 簡潔扼要
+4. 決議和待辦必須具體、可追蹤"""
+
+
+async def summarize_chunk(chunk_text: str, chunk_index: int, total_chunks: int, glossary_suffix: str = "") -> str:
+    """對單段逐字稿生成精簡摘要。"""
+    try:
+        system_prompt = CHUNK_SUMMARY_PROMPT + glossary_suffix
+        response = await llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"以下是會議第 {chunk_index}/{total_chunks} 段逐字稿：\n\n{chunk_text}"},
+            ],
+            max_tokens=CHUNK_SUMMARY_MAX_TOKENS,
+            temperature=0.3,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        result = response.choices[0].message.content.strip()
+        return strip_think_tags(result)
+    except Exception as e:
+        logger.error(f"段落 {chunk_index} 摘要失敗: {e}")
+        return f"（第 {chunk_index} 段摘要失敗）"
+
+
+def split_transcript_into_chunks(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
+    """將逐字稿按行切分為多個不超過 chunk_size 字元的段落。"""
+    lines = text.split("\n")
+    chunks = []
+    current_chunk = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > chunk_size and current_chunk:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_len = line_len
+        else:
+            current_chunk.append(line)
+            current_len += line_len
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    return chunks
+
+
 async def generate_summary(session_id: str, redis_conn: aioredis.Redis) -> str:
-    """生成會議摘要（串流模式）。"""
+    """生成會議摘要（串流模式）。超過 CHUNK_THRESHOLD 字元自動啟動分段摘要。"""
     
-    # 1. 確保 vLLM 已啟動 (為了生成摘要，必須強制啟動)
+    # 1. 確保 vLLM 已啟動
     logger.info(f"Session {session_id}: 準備生成摘要，正在喚醒 GPU...")
     ready = await ensure_llm_ready()
     if not ready:
         return "❌ GPU 喚醒失敗，無法生成摘要。"
 
-    # 從 Redis 取出所有轉寫紀錄
+    # 2. 從 Redis 取出所有轉寫紀錄
     transcript_key = SESSION_TRANSCRIPT_PREFIX + session_id
     records = await redis_conn.lrange(transcript_key, 0, -1)
 
@@ -263,14 +400,13 @@ async def generate_summary(session_id: str, redis_conn: aioredis.Redis) -> str:
         manage_vllm("stop")
         return "⚠️ 此會議沒有轉寫紀錄。"
 
-    # 組合完整的轉寫文本
+    # 3. 組合完整的轉寫文本
     full_transcript_parts = []
     for record_str in records:
         try:
             record = json.loads(record_str)
             text = record.get("text", "")
             timestamp = record.get("timestamp", 0)
-            
             if timestamp:
                 from datetime import datetime
                 time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
@@ -286,29 +422,83 @@ async def generate_summary(session_id: str, redis_conn: aioredis.Redis) -> str:
         manage_vllm("stop")
         return "⚠️ 轉寫紀錄為空。"
 
-    logger.info(f"Session {session_id}: 生成摘要 (轉寫長度: {len(full_transcript)} chars)...")
+    transcript_len = len(full_transcript)
+    logger.info(f"Session {session_id}: 生成摘要 (轉寫長度: {transcript_len} chars)...")
 
-    # 截斷過長內容
-    max_chars = 10000
-    if len(full_transcript) > max_chars:
-        truncated = full_transcript[:max_chars]
-        last_newline = truncated.rfind('\n')
-        if last_newline > 0:
-            truncated = truncated[:last_newline]
-        full_transcript = truncated + "\n...(內容過長已截斷)..."
-        logger.warning(f"Session {session_id}: 已截斷至 {len(full_transcript)} 字元。")
+    # 4. 讀取詞彙表並建構後綴（摘要也注入專有名詞）
+    terms = await get_glossary_terms(redis_conn)
+    glossary_suffix = _build_glossary_suffix(terms, "zh")
+
+    # 5. 判斷是否需要分段摘要
+    use_chunked = transcript_len > CHUNK_THRESHOLD
+
+    if use_chunked:
+        # === MapReduce 分段摘要 ===
+        chunks = split_transcript_into_chunks(full_transcript)
+        total_chunks = len(chunks)
+        logger.info(f"Session {session_id}: 啟動分段摘要 — {total_chunks} 段")
+
+        # 通知前端進入分段模式
+        await redis_conn.publish(
+            CHANNEL_SUMMARY,
+            json.dumps({
+                "session_id": session_id,
+                "type": "summary_chunk",
+                "chunk": f"📋 逐字稿較長（{transcript_len} 字），啟動分段摘要（{total_chunks} 段）...\n\n",
+                "timestamp": time.time(),
+            }, ensure_ascii=False),
+        )
+
+        # Map: 逐段摘要
+        chunk_summaries = []
+        for i, chunk in enumerate(chunks, 1):
+            await redis_conn.publish(
+                CHANNEL_SUMMARY,
+                json.dumps({
+                    "session_id": session_id,
+                    "type": "summary_chunk",
+                    "chunk": f"⏳ 正在處理第 {i}/{total_chunks} 段...\n",
+                    "timestamp": time.time(),
+                }, ensure_ascii=False),
+            )
+            summary = await summarize_chunk(chunk, i, total_chunks, glossary_suffix)
+            chunk_summaries.append(f"### 第 {i} 段摘要\n{summary}")
+            logger.info(f"Session {session_id}: 段 {i}/{total_chunks} 摘要完成 ({len(summary)} chars)")
+
+        # Reduce: 合併所有段落摘要
+        merged_input = "\n\n".join(chunk_summaries)
+        logger.info(f"Session {session_id}: 合併 {total_chunks} 段摘要 ({len(merged_input)} chars)...")
+
+        await redis_conn.publish(
+            CHANNEL_SUMMARY,
+            json.dumps({
+                "session_id": session_id,
+                "type": "summary_chunk",
+                "chunk": f"\n🔄 正在整合所有段落摘要...\n\n",
+                "timestamp": time.time(),
+            }, ensure_ascii=False),
+        )
+
+        # 用 MERGE prompt 生成最終摘要（串流）
+        summary_input = merged_input
+        summary_system_prompt = MERGE_SUMMARY_PROMPT + glossary_suffix
+    else:
+        # === 短文直接摘要 ===
+        summary_input = full_transcript
+        summary_system_prompt = SUMMARY_SYSTEM_PROMPT + glossary_suffix
 
     try:
         # 串流模式生成摘要
         stream = await llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                {"role": "user", "content": f"以下是會議轉寫紀錄：\n\n{full_transcript}"},
+                {"role": "system", "content": summary_system_prompt},
+                {"role": "user", "content": f"以下是會議轉寫紀錄：\n\n{summary_input}"},
             ],
             max_tokens=SUMMARY_MAX_TOKENS,
             temperature=0.3,
             stream=True,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 
         full_summary = ""
@@ -370,7 +560,10 @@ async def generate_summary(session_id: str, redis_conn: aioredis.Redis) -> str:
 # 主迴圈
 # ---------------------------------------------------------------------------
 async def translation_loop(redis_conn: aioredis.Redis):
-    """即時翻譯迴圈：訂閱 ch:transcriptions，翻譯後發布到 ch:translations。"""
+    """即時翻譯迴圈：訂閱 ch:transcriptions，翻譯後發布到 ch:translations。
+    
+    支援漸進式翻譯修正：追蹤最近的 segments，當句子更完整時自動重新翻譯。
+    """
     pubsub = redis_conn.pubsub()
     await pubsub.subscribe(CHANNEL_TRANSCRIPTIONS)
     logger.info("翻譯迴圈啟動，訂閱 ch:transcriptions...")
@@ -397,13 +590,28 @@ async def translation_loop(redis_conn: aioredis.Redis):
             if not text.strip():
                 continue
 
-            # 翻譯
-            result = await translate_text(text, source_lang)
+            # --- 漸進式翻譯：追蹤 segments ---
+            seg_id = f"{session_id}_{int(time.time() * 1000)}"
+            if session_id not in _session_segments:
+                _session_segments[session_id] = []
+            
+            _session_segments[session_id].append({
+                "text": text,
+                "seg_id": seg_id,
+                "timestamp": time.time(),
+            })
+            
+            # 保持窗口大小
+            if len(_session_segments[session_id]) > SEGMENT_MERGE_WINDOW:
+                _session_segments[session_id] = _session_segments[session_id][-SEGMENT_MERGE_WINDOW:]
+
+            # 1. 先即時翻譯當前 segment（快速回應）
+            result = await translate_text(text, source_lang, redis_conn=redis_conn)
             
             if "error" in result:
                 continue
 
-            # 發布翻譯結果
+            # 發布即時翻譯結果
             translation_data = {
                 "session_id": session_id,
                 "original_text": text,
@@ -411,6 +619,8 @@ async def translation_loop(redis_conn: aioredis.Redis):
                 "source_lang": result.get("source_lang", source_lang),
                 "target_lang": result.get("target_lang", ""),
                 "timestamp": time.time(),
+                "seg_id": seg_id,
+                "is_revision": False,
             }
 
             await redis_conn.publish(
@@ -423,6 +633,51 @@ async def translation_loop(redis_conn: aioredis.Redis):
                 f"[{result.get('source_lang','?')}→{result.get('target_lang','?')}] "
                 f"{text[:40]}... → {result.get('translated_text','')[:40]}..."
             )
+
+            # 2. 漸進式修正：偵測句尾才觸發合併翻譯
+            recent = _session_segments[session_id]
+            has_sentence_end = bool(SENTENCE_END_RE.search(text.strip()))
+            merged_text = " ".join(s["text"] for s in recent)
+            merged_len = len(merged_text)
+
+            should_revise = (
+                len(recent) >= 2
+                and merged_len >= REVISION_MIN_CHARS
+                and merged_len <= REVISION_MAX_CHARS
+                and has_sentence_end  # 只在句尾才觸發修正
+            )
+
+            if should_revise:
+                # 去重：檢查是否和上次合併的內容相同
+                text_hash = hashlib.md5(merged_text.encode()).hexdigest()
+                if text_hash != _last_revision_hash.get(session_id):
+                    _last_revision_hash[session_id] = text_hash
+                    revision_result = await translate_text(merged_text, source_lang, redis_conn=redis_conn)
+                    if "error" not in revision_result:
+                        revision_data = {
+                            "session_id": session_id,
+                            "original_text": merged_text,
+                            "translated_text": revision_result.get("translated_text", ""),
+                            "source_lang": revision_result.get("source_lang", source_lang),
+                            "target_lang": revision_result.get("target_lang", ""),
+                            "timestamp": time.time(),
+                            "seg_ids": [s["seg_id"] for s in recent],
+                            "is_revision": True,
+                        }
+                        await redis_conn.publish(
+                            CHANNEL_TRANSLATIONS,
+                            json.dumps(revision_data, ensure_ascii=False),
+                        )
+                        logger.info(
+                            f"Session {session_id}: [修正翻譯] "
+                            f"合併 {len(recent)} 段 → {revision_result.get('translated_text','')[:60]}..."
+                        )
+
+                # 句子完成 → 清空 pending，開始新句子
+                _session_segments[session_id] = []
+            elif merged_len > REVISION_MAX_CHARS:
+                # 超長但未斷句 → 強制清空避免無限堆積
+                _session_segments[session_id] = recent[-1:]
 
     except asyncio.CancelledError:
         logger.info("翻譯迴圈取消。")

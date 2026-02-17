@@ -754,27 +754,40 @@ body {
 
 /* Translation entries */
 .translation-entry {
-    padding: 8px 16px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--border);
-}
-
-.entry-line {
-    display: flex;
-    align-items: center;
-    margin-bottom: 4px;
+    transition: background 0.3s ease;
 }
 
 .entry-original {
-    color: var(--fg-2);
+    color: #858585;
     font-size: 13px;
-    padding-left: 52px;
-    margin-bottom: 2px;
+    line-height: 1.5;
+    margin-bottom: 4px;
+    font-family: var(--mono);
 }
 
 .entry-translated {
-    color: var(--green);
+    color: #50FA7B;
+    font-size: 15px;
     font-weight: 500;
-    padding-left: 52px;
+    line-height: 1.5;
+    font-family: var(--sans);
+}
+
+/* Revision flash animation */
+.translation-revised {
+    animation: revision-flash 0.6s ease;
+}
+
+@keyframes revision-flash {
+    0% {
+        background: rgba(80, 250, 123, 0.15);
+    }
+
+    100% {
+        background: transparent;
+    }
 }
 
 /* ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�

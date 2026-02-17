@@ -7,7 +7,7 @@
 #   redis      — Message Broker
 #   app-core   — Web UI + Gateway + Translation + Summary (CPU Only)
 #   worker-asr — ASR + VAD + Diarization (GPU 0)
-#   worker-llm — Qwen2.5-32B LLM API (GPU 1)
+#   worker-llm — Qwen3-32B LLM API (GPU 1)
 # =============================================================================
 
 services:
@@ -20,7 +20,7 @@ services:
     container_name: concall-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
@@ -49,7 +49,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - LLM_BASE_URL=http://worker-llm:8000/v1
-      - LLM_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ
+      - LLM_MODEL=Qwen/Qwen3-32B-AWQ
       - VLLM_CONTAINER_NAME=concall-vllm
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
@@ -78,7 +78,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - LLM_BASE_URL=http://worker-llm:8000/v1
-      - LLM_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ
+      - LLM_MODEL=Qwen/Qwen3-32B-AWQ
       - VLLM_CONTAINER_NAME=concall-vllm
     depends_on:
       redis:
@@ -112,7 +112,7 @@ services:
               device_ids: [ '0' ]
               capabilities: [ gpu ]
     volumes:
-      - E:\work\AI_Antigravity\Test\aimodel:/root/.cache/huggingface/hub
+      - ${HF_CACHE_DIR:-./models}:/root/.cache/huggingface/hub
       - torch_cache:/root/.cache/torch
     depends_on:
       redis:
@@ -122,32 +122,31 @@ services:
 
   # ---------------------------------------------------------------------------
   # Service D: worker-llm — LLM OpenAI-Compatible API (GPU 1 獨佔)
-  # GPU 1: Qwen2.5-32B-AWQ (~18.5GB) + KV Cache (~5.5GB) = 24/24GB
+  # GPU 1: Qwen3-32B-AWQ (~18.5GB) + KV Cache (~5.5GB) = 24/24GB
   # ---------------------------------------------------------------------------
   worker-llm:
-    image: vllm/vllm-openai:v0.6.6.post1
+    image: vllm/vllm-openai:latest
     container_name: concall-vllm
     restart: unless-stopped
     command:
       - "--model"
-      - "Qwen/Qwen2.5-32B-Instruct-AWQ"
+      - "Qwen/Qwen3-32B-AWQ"
       - "--quantization"
       - "awq"
-      - "--dtype"
-      - "float16"
       - "--max-model-len"
-      - "4096"
-      - "--max-num-seqs"
-      - "4"
-      - "--enforce-eager"
+      - "8192"
       - "--gpu-memory-utilization"
-      - "0.95"
+      - "0.92"
+      - "--kv-cache-dtype"
+      - "fp8"
+      - "--enforce-eager"
+      - "--trust-remote-code"
       - "--host"
       - "0.0.0.0"
       - "--port"
       - "8000"
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     environment:
       - CUDA_VISIBLE_DEVICES=1
       - HF_TOKEN=${HF_TOKEN}
