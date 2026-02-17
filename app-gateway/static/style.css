@@ -1380,6 +1380,39 @@ body {
     color: var(--yellow);
 }
 
+/* Markdown table */
+.summary-content .md-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 12px;
+    font-family: var(--mono);
+}
+
+.summary-content .md-table th,
+.summary-content .md-table td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.summary-content .md-table th {
+    background: rgba(86, 182, 194, 0.12);
+    color: var(--cyan);
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.summary-content .md-table td {
+    color: var(--fg-2);
+}
+
+.summary-content .md-table tr:hover td {
+    background: var(--bg-hover);
+}
+
 /* Summary toolbar */
 .summary-toolbar {
     display: flex;

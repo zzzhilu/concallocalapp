@@ -583,18 +583,37 @@ function highlightSelection() {
         return;
     }
 
-    const mark = document.createElement('mark');
-    mark.className = 'summary-highlight';
-    try {
-        range.surroundContents(mark);
-    } catch (e) {
-        // If selection spans multiple elements, wrap inline
-        const fragment = range.extractContents();
-        mark.appendChild(fragment);
-        range.insertNode(mark);
+    const selectedText = selection.toString().trim();
+    if (!selectedText) return;
+
+    // Persist highlight in raw markdown using ==text== syntax
+    // Find the selected text in _summaryRawText and wrap with ==
+    const escapedText = selectedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?<!==)${escapedText}(?!==)`);
+    if (regex.test(_summaryRawText)) {
+        _summaryRawText = _summaryRawText.replace(regex, `==${selectedText}==`);
+        _lastSummaryText = _summaryRawText;
+        renderSummaryText(_summaryRawText);
+        addTerminalLine('[摘要] 已標記選取文字 (已存入 Markdown)', 'success');
+
+        // Auto-save if we have a loaded meeting
+        if (_currentMeetingId) {
+            saveSummaryEdits();
+        }
+    } else {
+        // Fallback: just highlight in DOM (non-persistent)
+        const mark = document.createElement('mark');
+        mark.className = 'summary-highlight';
+        try {
+            range.surroundContents(mark);
+        } catch (e) {
+            const fragment = range.extractContents();
+            mark.appendChild(fragment);
+            range.insertNode(mark);
+        }
+        addTerminalLine('[摘要] 已標記選取文字', 'success');
     }
     selection.removeAllRanges();
-    addTerminalLine('[摘要] 已標記選取文字', 'success');
 }
 
 async function saveSummaryEdits() {
@@ -725,15 +744,72 @@ function escapeHtml(str) {
 }
 
 function simpleMarkdown(md) {
-    return md
-        .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-        .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-        .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-        .replace(/^\- \[ \] (.*$)/gm, '<li>☐ $1</li>')
-        .replace(/^\- \[x\] (.*$)/gm, '<li>☑ $1</li>')
-        .replace(/^\- (.*$)/gm, '<li>$1</li>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n/g, '<br>');
+    const lines = md.split('\n');
+    let html = '';
+    let inTable = false;
+    let headerDone = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+
+        // Table row: starts and ends with |
+        if (/^\|(.+)\|$/.test(line.trim())) {
+            const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+
+            // Separator row (|---|---|)
+            if (cells.every(c => /^[-:]+$/.test(c))) {
+                headerDone = true;
+                continue;
+            }
+
+            if (!inTable) {
+                html += '<table class="md-table">';
+                inTable = true;
+                headerDone = false;
+            }
+
+            // If next line is separator, this is header
+            const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+            const isHeader = !headerDone && /^\|[-:|\s]+\|$/.test(nextLine);
+
+            const tag = isHeader ? 'th' : 'td';
+            const rowClass = isHeader ? ' class="md-table-header"' : '';
+            html += `<tr${rowClass}>` + cells.map(c => {
+                // Apply inline formatting inside cells
+                c = c.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                c = c.replace(/==(.+?)==/g, '<mark class="summary-highlight">$1</mark>');
+                return `<${tag}>${c}</${tag}>`;
+            }).join('') + '</tr>';
+            continue;
+        }
+
+        // Close table if we were in one
+        if (inTable) {
+            html += '</table>';
+            inTable = false;
+            headerDone = false;
+        }
+
+        // Headings
+        if (/^### (.*)$/.test(line)) { html += `<h3>${line.replace(/^### /, '')}</h3>`; continue; }
+        if (/^## (.*)$/.test(line)) { html += `<h2>${line.replace(/^## /, '')}</h2>`; continue; }
+        if (/^# (.*)$/.test(line)) { html += `<h1>${line.replace(/^# /, '')}</h1>`; continue; }
+
+        // Checkboxes
+        if (/^- \[ \] (.*)$/.test(line)) { html += `<li>☐ ${line.replace(/^- \[ \] /, '')}</li>`; continue; }
+        if (/^- \[x\] (.*)$/i.test(line)) { html += `<li>☑ ${line.replace(/^- \[x\] /i, '')}</li>`; continue; }
+
+        // List items
+        if (/^- (.*)$/.test(line)) { html += `<li>${line.replace(/^- /, '')}</li>`; continue; }
+
+        // Inline formatting + line break
+        line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        line = line.replace(/==(.+?)==/g, '<mark class="summary-highlight">$1</mark>');
+        html += line + '<br>';
+    }
+
+    if (inTable) html += '</table>';
+    return html;
 }
 
 function clearAll() {
