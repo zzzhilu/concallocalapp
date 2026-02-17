@@ -495,18 +495,21 @@ function syntaxHighlightJSON(str) {
 
 // Accumulated streaming summary text
 let _summaryBuffer = '';
+let _lastSummaryText = '';  // Persisted copy for save
 let _summaryRawText = '';   // Store raw markdown for editing
 let _summaryEditMode = false;
 let _currentMeetingId = null; // Track which meeting is loaded
 
 function showSummary(data) {
     const summaryText = data.summary || '無摘要內容';
+    _lastSummaryText = summaryText;
     renderSummaryText(summaryText);
     addTerminalLine('[摘要] 會議摘要已生成', 'success');
 }
 
 function appendSummaryChunk(chunk) {
     _summaryBuffer += chunk;
+    _lastSummaryText = _summaryBuffer;
     renderSummaryText(_summaryBuffer);
 }
 
@@ -993,6 +996,8 @@ function connectWebSocket() {
                         summaryModal.classList.add('active');
                         switchTab('summary');
                     }
+                    // Re-save meeting with final summary
+                    saveMeeting();
                 } else {
                     // Legacy non-streaming fallback
                     if (summaryLoadingOverlay) summaryLoadingOverlay.classList.remove('active');
@@ -1298,15 +1303,21 @@ function extractTitleFromSummary(summaryText) {
 }
 
 async function saveMeeting() {
-    // Collect transcript lines from DOM
-    const transcriptEls = document.querySelectorAll('#transcriptionContent .code-line:not(.empty-state .code-line)');
-    const transcripts = Array.from(transcriptEls).map(el => el.textContent);
+    // Use in-memory data (not DOM) for reliability
+    const transcripts = transcriptSegments.map(seg => {
+        const spk = seg.speaker && speakerMap[seg.speaker]
+            ? speakerMap[seg.speaker].name || seg.speaker
+            : '';
+        const time = formatDuration(seg.start * 1000);
+        return spk ? `[${time}] ${spk}: ${seg.text}` : `[${time}] ${seg.text}`;
+    });
 
-    const translationEls = document.querySelectorAll('#translationContent .code-line:not(.empty-state .code-line)');
-    const translations = Array.from(translationEls).map(el => el.textContent);
+    // Translations: read from DOM (no in-memory array exists)
+    const translationEls = document.querySelectorAll('#translationContent .translation-entry');
+    const translations = Array.from(translationEls).map(el => el.textContent.trim());
 
-    const summaryEl = document.getElementById('summaryContent');
-    const summary = summaryEl ? summaryEl.innerText : '';
+    // Summary: use in-memory _lastSummaryText (DOM may have rendered HTML)
+    const summary = _lastSummaryText || '';
 
     // Extract title from summary topic line
     const autoTitle = extractTitleFromSummary(summary);
@@ -1387,35 +1398,46 @@ async function loadMeeting(meetingId) {
         switchSummaryMode(false);
 
         // Restore transcripts
-        const transcriptionContent = document.getElementById('transcriptionContent');
-        if (transcriptionContent && m.transcripts.length) {
-            transcriptionContent.innerHTML = '';
+        const transcriptionPanel = document.getElementById('transcriptionPanel');
+        if (transcriptionPanel && m.transcripts && m.transcripts.length) {
+            // Hide empty state
+            const tEmpty = document.getElementById('transcriptionEmpty');
+            if (tEmpty) tEmpty.style.display = 'none';
+            // Clear existing content except empty state
+            Array.from(transcriptionPanel.children).forEach(ch => {
+                if (ch.id !== 'transcriptionEmpty') ch.remove();
+            });
             lineCounter = 0;
             m.transcripts.forEach(line => {
                 lineCounter++;
                 const div = document.createElement('div');
                 div.className = 'code-line';
-                div.innerHTML = `<span class="ln">${lineCounter}</span><span class="code-text">${line}</span>`;
-                transcriptionContent.appendChild(div);
+                div.innerHTML = `<span class="line-number">${padLineNum(lineCounter)}</span><span class="code-text">${escapeHtml(line)}</span>`;
+                transcriptionPanel.appendChild(div);
             });
         }
 
         // Restore translations
-        const translationContent = document.getElementById('translationContent');
-        if (translationContent && m.translations.length) {
-            translationContent.innerHTML = '';
+        const translationPanelEl = document.getElementById('translationPanel');
+        if (translationPanelEl && m.translations && m.translations.length) {
+            const trEmpty = document.getElementById('translationEmpty');
+            if (trEmpty) trEmpty.style.display = 'none';
+            Array.from(translationPanelEl.children).forEach(ch => {
+                if (ch.id !== 'translationEmpty') ch.remove();
+            });
             translationLineCounter = 0;
             m.translations.forEach(line => {
                 translationLineCounter++;
                 const div = document.createElement('div');
                 div.className = 'code-line';
-                div.innerHTML = `<span class="ln">${translationLineCounter}</span><span class="code-text">${line}</span>`;
-                translationContent.appendChild(div);
+                div.innerHTML = `<span class="line-number">${padLineNum(translationLineCounter)}</span><span class="code-text">${escapeHtml(line)}</span>`;
+                translationPanelEl.appendChild(div);
             });
         }
 
         // Restore summary (render as markdown)
         if (m.summary) {
+            _lastSummaryText = m.summary;
             renderSummaryText(m.summary);
         }
 
