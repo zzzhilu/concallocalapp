@@ -32,6 +32,7 @@ from core.redis_keys import (
     CHANNEL_SUMMARY,
     CHANNEL_STATUS,
     SESSION_END_SIGNAL,
+    GLOSSARY_KEY,
 )
 
 # ---------------------------------------------------------------------------
@@ -164,6 +165,22 @@ async def translate_text(text: str, source_lang: str = "auto") -> dict:
 
         # 根據翻譯方向選擇對應的 system prompt
         system_prompt = TRANSLATE_PROMPT_EN2ZH if target_lang == "zh" else TRANSLATE_PROMPT_ZH2EN
+
+        # 注入自訂詞彙表
+        try:
+            r = aioredis.from_url(REDIS_URL, decode_responses=True)
+            glossary_json = await r.get(GLOSSARY_KEY)
+            await r.aclose()
+            if glossary_json:
+                terms = json.loads(glossary_json)
+                if terms:
+                    if target_lang == "zh":
+                        glossary_lines = "\n".join(f"- {t['en']} → {t['zh']}" for t in terms)
+                    else:
+                        glossary_lines = "\n".join(f"- {t['zh']} → {t['en']}" for t in terms)
+                    system_prompt += f"\n\n以下是專有名詞對照表，請嚴格遵循：\n{glossary_lines}"
+        except Exception as e:
+            logger.warning(f"Failed to load glossary from Redis: {e}")
 
         response = await llm_client.chat.completions.create(
             model=LLM_MODEL,

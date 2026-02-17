@@ -39,6 +39,7 @@ from core.redis_keys import (
     CHANNEL_SUMMARY,
     CHANNEL_STATUS,
     SESSION_END_SIGNAL,
+    GLOSSARY_KEY,
 )
 from core.audio_utils import bytes_to_float32, float32_to_bytes
 from core.database import init_db, save_meeting, list_meetings, get_meeting, delete_meeting
@@ -165,6 +166,47 @@ async def api_llm_warmup():
     logger.info("LLM warmup request received. Starting vLLM container...")
     asyncio.create_task(manage_vllm("start"))
     return JSONResponse({"ok": True, "message": "vLLM container starting..."})
+
+# ---------------------------------------------------------------------------
+# 詞彙表 (Glossary) API
+# ---------------------------------------------------------------------------
+GLOSSARY_DIR = os.getenv("DATA_DIR", "/app/data")
+GLOSSARY_FILE = os.path.join(GLOSSARY_DIR, "glossary.json")
+
+def _load_glossary_file() -> list:
+    """讀取詞彙表檔案。"""
+    if os.path.exists(GLOSSARY_FILE):
+        with open(GLOSSARY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("terms", []) if isinstance(data, dict) else data
+    return []
+
+def _save_glossary_file(terms: list):
+    """儲存詞彙表檔案。"""
+    os.makedirs(GLOSSARY_DIR, exist_ok=True)
+    with open(GLOSSARY_FILE, "w", encoding="utf-8") as f:
+        json.dump({"terms": terms}, f, ensure_ascii=False, indent=2)
+
+@app.get("/api/glossary")
+async def api_get_glossary():
+    """讀取詞彙表。"""
+    terms = _load_glossary_file()
+    return JSONResponse({"terms": terms})
+
+@app.put("/api/glossary")
+async def api_put_glossary(request: Request):
+    """更新詞彙表並同步至 Redis。"""
+    body = await request.json()
+    terms = body.get("terms", [])
+    _save_glossary_file(terms)
+    # 同步至 Redis，供 worker-intelligence 即時讀取
+    try:
+        r = aioredis.from_url(REDIS_URL, decode_responses=True)
+        await r.set(GLOSSARY_KEY, json.dumps(terms, ensure_ascii=False))
+        await r.aclose()
+    except Exception as e:
+        logger.warning(f"Glossary sync to Redis failed: {e}")
+    return JSONResponse({"ok": True, "count": len(terms)})
 
 @app.post("/shutdown")
 async def shutdown_services():
@@ -320,6 +362,16 @@ async def redis_subscriber():
 async def startup():
     """啟動 Redis 訂閱後台任務。"""
     init_db()
+    # Sync glossary to Redis on startup
+    try:
+        terms = _load_glossary_file()
+        if terms:
+            r = aioredis.from_url(REDIS_URL, decode_responses=True)
+            await r.set(GLOSSARY_KEY, json.dumps(terms, ensure_ascii=False))
+            await r.aclose()
+            logger.info(f"Glossary synced to Redis: {len(terms)} terms")
+    except Exception as e:
+        logger.warning(f"Glossary startup sync failed: {e}")
     app.state.subscriber_task = asyncio.create_task(redis_subscriber())
     logger.info("app-gateway started.")
 

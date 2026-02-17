@@ -102,6 +102,16 @@
                         <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
                     </svg>
                 </button>
+                <!-- Glossary -->
+                <button class="activity-btn" data-tooltip="詞彙表" id="glossaryBtn">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+                        <line x1="9" y1="7" x2="17" y2="7" />
+                        <line x1="9" y1="11" x2="15" y2="11" />
+                    </svg>
+                </button>
                 <!-- Settings -->
                 <button class="activity-btn" data-tooltip="設定" id="settingsBtn">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -501,6 +511,62 @@
             <p class="loading-desc">AI 正在分析會議內容<span class="loading-dots"></span></p>
         </div>
     </div>
+
+    <!-- Glossary Modal -->
+    <div class="modal-overlay" id="glossaryModal">
+        <div class="modal-editor glossary-modal">
+            <div class="modal-editor__head">
+                <div class="modal-editor__tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8BE9FD" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+                    </svg>
+                    <span>glossary.json — 自訂詞彙表</span>
+                </div>
+                <button class="modal-close" id="closeGlossary">&times;</button>
+            </div>
+            <div class="modal-editor__body glossary-body">
+                <div class="glossary-toolbar">
+                    <div class="glossary-count" id="glossaryCount">共 0 筆詞彙</div>
+                    <div class="glossary-actions">
+                        <button class="btn btn--ghost btn--sm" id="glossaryImportBtn" title="匯入">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                            </svg>
+                            匯入
+                        </button>
+                        <button class="btn btn--ghost btn--sm" id="glossaryExportBtn" title="匯出">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                            </svg>
+                            匯出
+                        </button>
+                    </div>
+                </div>
+                <div class="glossary-table-wrap">
+                    <table class="glossary-table" id="glossaryTable">
+                        <thead>
+                            <tr>
+                                <th>English</th>
+                                <th>中文</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="glossaryTableBody">
+                        </tbody>
+                    </table>
+                </div>
+                <div class="glossary-add-row">
+                    <input type="text" class="glossary-input" id="glossaryNewEn" placeholder="English term..." />
+                    <input type="text" class="glossary-input" id="glossaryNewZh" placeholder="中文翻譯..." />
+                    <button class="btn btn--primary btn--sm" id="glossaryAddBtn">+ 新增</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <input type="file" id="glossaryFileInput" accept=".json" style="display:none" />
 
     <!-- ═══ Scripts ═══ -->
     <script src="/static/app.js"></script>

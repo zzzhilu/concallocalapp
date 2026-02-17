@@ -3,7 +3,7 @@
  * Strategy: Cache static assets, network-first for API calls
  */
 
-const CACHE_NAME = 'concall-v25';
+const CACHE_NAME = 'concall-v26';
 const STATIC_ASSETS = [
     '/',
     '/static/style.css',

@@ -77,6 +77,18 @@ const copySummary = document.getElementById('copySummary');
 const downloadSummary = document.getElementById('downloadSummary');
 const audioDeviceSelect = document.getElementById('audioDeviceSelect');
 const audioSourceSelect = document.getElementById('audioSourceSelect');
+// Glossary DOM refs
+const glossaryBtn = document.getElementById('glossaryBtn');
+const glossaryModal = document.getElementById('glossaryModal');
+const closeGlossary = document.getElementById('closeGlossary');
+const glossaryTableBody = document.getElementById('glossaryTableBody');
+const glossaryCount = document.getElementById('glossaryCount');
+const glossaryNewEn = document.getElementById('glossaryNewEn');
+const glossaryNewZh = document.getElementById('glossaryNewZh');
+const glossaryAddBtn = document.getElementById('glossaryAddBtn');
+const glossaryImportBtn = document.getElementById('glossaryImportBtn');
+const glossaryExportBtn = document.getElementById('glossaryExportBtn');
+const glossaryFileInput = document.getElementById('glossaryFileInput');
 const modeZhBtn = document.getElementById('modeZh');
 const modeEnBtn = document.getElementById('modeEn');
 const modeToggleBtn = document.getElementById('modeToggleBtn');
@@ -1660,6 +1672,153 @@ document.addEventListener('DOMContentLoaded', () => {
     if (summarySaveBtn) {
         summarySaveBtn.addEventListener('click', () => saveSummaryEdits());
     }
+    // ── Glossary modal ──
+    let _glossaryTerms = [];
+
+    function renderGlossary() {
+        if (!glossaryTableBody) return;
+        glossaryTableBody.innerHTML = '';
+        if (_glossaryTerms.length === 0) {
+            glossaryTableBody.innerHTML = '<tr><td colspan="3" class="glossary-empty">// 尚未新增詞彙，請在下方輸入</td></tr>';
+        } else {
+            _glossaryTerms.forEach((term, idx) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td class="glossary-en">${term.en}</td><td class="glossary-zh">${term.zh}</td><td><button class="glossary-del-btn" data-idx="${idx}" title="刪除">✕</button></td>`;
+                glossaryTableBody.appendChild(tr);
+            });
+        }
+        if (glossaryCount) glossaryCount.textContent = `共 ${_glossaryTerms.length} 筆詞彙`;
+    }
+
+    async function loadGlossary() {
+        try {
+            const res = await fetch('/api/glossary');
+            const data = await res.json();
+            _glossaryTerms = data.terms || [];
+            renderGlossary();
+        } catch (e) { console.warn('[Glossary] Load failed:', e); }
+    }
+
+    async function saveGlossary() {
+        try {
+            await fetch('/api/glossary', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ terms: _glossaryTerms }),
+            });
+            addTerminalLine(`[詞彙表] 已儲存 ${_glossaryTerms.length} 筆詞彙`, 'success');
+        } catch (e) {
+            addTerminalLine(`[詞彙表] 儲存失敗: ${e.message}`, 'error');
+        }
+    }
+
+    function addGlossaryTerm() {
+        const en = glossaryNewEn ? glossaryNewEn.value.trim() : '';
+        const zh = glossaryNewZh ? glossaryNewZh.value.trim() : '';
+        if (!en || !zh) return;
+        // Check for duplicate
+        if (_glossaryTerms.some(t => t.en.toLowerCase() === en.toLowerCase())) {
+            addTerminalLine(`[詞彙表] ⚠️ "${en}" 已存在`, 'error');
+            return;
+        }
+        _glossaryTerms.push({ en, zh });
+        _glossaryTerms.sort((a, b) => a.en.localeCompare(b.en));
+        renderGlossary();
+        saveGlossary();
+        if (glossaryNewEn) { glossaryNewEn.value = ''; glossaryNewEn.focus(); }
+        if (glossaryNewZh) glossaryNewZh.value = '';
+    }
+
+    function deleteGlossaryTerm(idx) {
+        if (idx < 0 || idx >= _glossaryTerms.length) return;
+        const removed = _glossaryTerms.splice(idx, 1)[0];
+        renderGlossary();
+        saveGlossary();
+        addTerminalLine(`[詞彙表] 已刪除: ${removed.en} → ${removed.zh}`, 'info');
+    }
+
+    function exportGlossary() {
+        const data = JSON.stringify({ terms: _glossaryTerms }, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `glossary_${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        addTerminalLine(`[詞彙表] 已匯出 ${_glossaryTerms.length} 筆詞彙`, 'success');
+    }
+
+    function importGlossary(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                const newTerms = data.terms || (Array.isArray(data) ? data : []);
+                if (!Array.isArray(newTerms)) throw new Error('Invalid format');
+                // Merge: add non-duplicate terms
+                let added = 0;
+                newTerms.forEach(t => {
+                    if (t.en && t.zh && !_glossaryTerms.some(x => x.en.toLowerCase() === t.en.toLowerCase())) {
+                        _glossaryTerms.push({ en: t.en, zh: t.zh });
+                        added++;
+                    }
+                });
+                _glossaryTerms.sort((a, b) => a.en.localeCompare(b.en));
+                renderGlossary();
+                saveGlossary();
+                addTerminalLine(`[詞彙表] 匯入完成: 新增 ${added} 筆，目前共 ${_glossaryTerms.length} 筆`, 'success');
+            } catch (err) {
+                addTerminalLine(`[詞彙表] ⚠️ 匯入失敗: ${err.message}`, 'error');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // Glossary button
+    if (glossaryBtn) {
+        glossaryBtn.addEventListener('click', () => {
+            if (glossaryModal) glossaryModal.classList.add('active');
+            loadGlossary();
+        });
+    }
+    if (closeGlossary) {
+        closeGlossary.addEventListener('click', () => {
+            if (glossaryModal) glossaryModal.classList.remove('active');
+        });
+    }
+    if (glossaryModal) {
+        glossaryModal.addEventListener('click', (e) => {
+            if (e.target === glossaryModal) glossaryModal.classList.remove('active');
+        });
+    }
+    if (glossaryAddBtn) {
+        glossaryAddBtn.addEventListener('click', addGlossaryTerm);
+    }
+    // Enter key to add
+    [glossaryNewEn, glossaryNewZh].forEach(input => {
+        if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addGlossaryTerm(); });
+    });
+    if (glossaryExportBtn) {
+        glossaryExportBtn.addEventListener('click', exportGlossary);
+    }
+    if (glossaryImportBtn) {
+        glossaryImportBtn.addEventListener('click', () => { if (glossaryFileInput) glossaryFileInput.click(); });
+    }
+    if (glossaryFileInput) {
+        glossaryFileInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) importGlossary(e.target.files[0]);
+            e.target.value = '';
+        });
+    }
+    // Delegate delete click on table
+    if (glossaryTableBody) {
+        glossaryTableBody.addEventListener('click', (e) => {
+            const btn = e.target.closest('.glossary-del-btn');
+            if (btn) deleteGlossaryTerm(parseInt(btn.dataset.idx, 10));
+        });
+    }
+
     // ── Startup ──
     connectWebSocket();
     switchTab('transcription');
