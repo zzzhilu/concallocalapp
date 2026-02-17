@@ -999,6 +999,19 @@ function setMode(mode) {
             });
             // Update breadcrumb
             if (breadcrumbFile) breadcrumbFile.textContent = '逐字稿.ts ↔ 翻譯.ts';
+
+            // Preload LLM: wait 1s then warmup vLLM container
+            setTimeout(() => {
+                addTerminalLine('[模型] 正在預載 Qwen LLM 翻譯模型...', 'info');
+                fetch('/api/llm/warmup', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(data => {
+                        addTerminalLine('[模型] ✅ LLM 預載指令已送出，模型啟動中...', 'success');
+                    })
+                    .catch(err => {
+                        addTerminalLine(`[模型] ⚠️ LLM 預載失敗: ${err.message}`, 'error');
+                    });
+            }, 1000);
         } else {
             panelsContainer.classList.remove('split-view');
             // Restore single-tab view

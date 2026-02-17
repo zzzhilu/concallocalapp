@@ -159,6 +159,13 @@ async def api_delete_meeting(meeting_id: str):
         return JSONResponse({"error": "Not found"}, status_code=404)
     return JSONResponse({"ok": True})
 
+@app.post("/api/llm/warmup")
+async def api_llm_warmup():
+    """預載 LLM 模型（啟動 vLLM 容器）以加速後續翻譯/摘要。"""
+    logger.info("LLM warmup request received. Starting vLLM container...")
+    asyncio.create_task(manage_vllm("start"))
+    return JSONResponse({"ok": True, "message": "vLLM container starting..."})
+
 @app.post("/shutdown")
 async def shutdown_services():
     """
