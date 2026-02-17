@@ -120,17 +120,19 @@ async def ensure_llm_ready(timeout=120):
 # ---------------------------------------------------------------------------
 # 翻譯功能
 # ---------------------------------------------------------------------------
-TRANSLATE_SYSTEM_PROMPT = """你是一個專業的即時翻譯員。你的工作是：
-1. 如果輸入是中文（包含繁體和簡體），翻譯成英文。
-2. 如果輸入是英文，翻譯成繁體中文 (Traditional Chinese)。
-3. 如果輸入包含混合語言，翻譯成繁體中文為主、英文為輔。
+TRANSLATE_PROMPT_EN2ZH = """你是專業的同步口譯員。翻譯策略：意譯為主，直譯為輔。忽略口語贅字，專注於傳達核心邏輯。若不確定專有名詞，保留原文。
 
 規則：
 - 必須使用繁體中文 (Traditional Chinese)
 - 只輸出翻譯結果，不要加任何說明或解釋
-- 保持原文的語氣和風格
-- 專有名詞保留原文
-- 翻譯要自然、流暢"""
+- 翻譯要自然、流暢，如同專業口譯員的即時翻譯"""
+
+TRANSLATE_PROMPT_ZH2EN = """You are a professional real-time translator. Translate the following Traditional Chinese text into natural, fluent English.
+
+Rules:
+- Output ONLY the translation, no explanations
+- Keep proper nouns in their original form
+- Maintain the tone and style of the original"""
 
 async def translate_text(text: str, source_lang: str = "auto") -> dict:
     """翻譯文字。"""
@@ -160,10 +162,13 @@ async def translate_text(text: str, source_lang: str = "auto") -> dict:
 
         target_lang = "en" if source_lang == "zh" else "zh"
 
+        # 根據翻譯方向選擇對應的 system prompt
+        system_prompt = TRANSLATE_PROMPT_EN2ZH if target_lang == "zh" else TRANSLATE_PROMPT_ZH2EN
+
         response = await llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ],
             max_tokens=TRANSLATE_MAX_TOKENS,
